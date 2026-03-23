@@ -1,7 +1,7 @@
 # UDM-WAN-Monitor
 DOCSight module for monitoring the WAN state of an Ubiquiti UDM Pro
 
-UDM Monitor Dashboard integrated as own Link the the DOCSight menu panel:
+UDM Monitor Dashboard integrated as own Link in the DOCSight menu panel:
 
 <img width="296" height="152" alt="image" src="https://github.com/user-attachments/assets/d8ad1ba4-e1df-4e09-99b5-0a009c8b4361" />
 
