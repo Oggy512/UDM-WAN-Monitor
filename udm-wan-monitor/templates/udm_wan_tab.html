@@ -1,0 +1,503 @@
+{#
+  UDM WAN Monitor — Tab Template  v4
+  HTML fragment included directly into DOCSight's index.html via {% include %}.
+  Data source: /proxy/network/api/s/{site}/stat/device
+    wan1 / wan2            → ip, latency, speed, traffic, availability
+    last_wan_interfaces    → alive (bool)
+    last_wan_status        → online/offline
+#}
+<div class="view-content" id="udm-wan-view">
+<style>
+#udm-wan-view .udm-hdr     { margin-bottom:1.25rem; }
+#udm-wan-view .udm-title   { font-size:1.2rem;font-weight:700;letter-spacing:-.02em;
+                              display:flex;align-items:center;gap:.5rem; }
+#udm-wan-view .udm-sub     { font-size:.82rem;color:var(--text-muted);margin-top:.2rem; }
+#udm-wan-view .udm-bar     { display:flex;align-items:center;justify-content:space-between;
+                              flex-wrap:wrap;gap:.5rem;margin-bottom:1.25rem; }
+#udm-wan-view .udm-ts      { font-size:.77rem;color:var(--text-muted); }
+#udm-wan-view .udm-grid    { display:grid;gap:1rem; }
+#udm-wan-view .udm-g2      { grid-template-columns:repeat(2,1fr); }
+#udm-wan-view .udm-g2d     { grid-template-columns:repeat(2,1fr); }
+#udm-wan-view .udm-mt      { margin-top:1rem; }
+@media(max-width:860px){
+  #udm-wan-view .udm-g2,
+  #udm-wan-view .udm-g2d   { grid-template-columns:1fr; }
+}
+#udm-wan-view .udm-card    { background:var(--glass-bg);
+                              backdrop-filter:var(--glass-blur);
+                              -webkit-backdrop-filter:var(--glass-blur);
+                              border:1px solid var(--glass-border);
+                              border-radius:var(--radius-md);
+                              padding:var(--space-lg); }
+#udm-wan-view .card-hd     { display:flex;align-items:flex-start;
+                              justify-content:space-between;
+                              margin-bottom:var(--space-md);gap:.5rem; }
+#udm-wan-view .card-lbl    { font-size:.7rem;font-weight:700;text-transform:uppercase;
+                              letter-spacing:.08em;color:var(--text-muted); }
+#udm-wan-view .card-title-row { display:flex;align-items:center;gap:.6rem; }
+#udm-wan-view .iw          { width:34px;height:34px;border-radius:10px;
+                              display:flex;align-items:center;justify-content:center;
+                              background:rgba(59,130,246,.15);color:var(--sapphire);
+                              flex-shrink:0; }
+#udm-wan-view .iw i        { width:17px;height:17px; }
+#udm-wan-view .wan-name    { font-size:.95rem;font-weight:700; }
+#udm-wan-view .wan-ifname  { font-size:.7rem;color:var(--text-muted);
+                              font-family:var(--font-mono,monospace); }
+
+/* ── Status pills (3 per WAN) ─────────────────────────────────────────── */
+#udm-wan-view .status-row  { display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.1rem; }
+#udm-wan-view .spill       { display:inline-flex;align-items:center;gap:.3rem;
+                              padding:.17rem .55rem;border-radius:100px;
+                              font-size:.7rem;font-weight:700;
+                              font-family:var(--font-mono,monospace);
+                              white-space:nowrap; }
+#udm-wan-view .spill-lbl   { font-weight:400;opacity:.75;font-family:var(--font-sans,sans-serif); }
+#udm-wan-view .sdot        { width:6px;height:6px;border-radius:50%;
+                              background:currentColor;flex-shrink:0; }
+#udm-wan-view .s-ok        { background:rgba(16,185,129,.15);color:var(--good,#10b981); }
+#udm-wan-view .s-bad       { background:rgba(239,68,68,.15); color:var(--crit,#ef4444); }
+#udm-wan-view .s-unk       { background:rgba(120,130,180,.1);color:var(--text-muted); }
+#udm-wan-view .s-ok .sdot  { animation:udmpulse 2s infinite; }
+@keyframes udmpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+
+/* ── Metric rows ──────────────────────────────────────────────────────── */
+#udm-wan-view .metrics     { display:flex;flex-direction:column;gap:.38rem;
+                              margin-top:var(--space-md);
+                              padding-top:var(--space-sm);
+                              border-top:1px solid var(--glass-border); }
+#udm-wan-view .metric      { display:flex;justify-content:space-between;
+                              align-items:baseline;font-size:.83rem; }
+#udm-wan-view .ml          { color:var(--text-muted); }
+#udm-wan-view .mv          { font-weight:600;font-variant-numeric:tabular-nums;
+                              font-family:var(--font-mono,monospace);font-size:.78rem; }
+#udm-wan-view .avail-bar   { height:3px;border-radius:2px;
+                              background:rgba(120,130,180,.2);overflow:hidden;
+                              margin-top:.15rem; }
+#udm-wan-view .avail-fill  { height:100%;border-radius:2px;
+                              background:var(--good,#10b981);transition:width .5s; }
+
+/* ── Traffic strip ────────────────────────────────────────────────────── */
+#udm-wan-view .traffic     { display:flex;gap:1.4rem;flex-wrap:wrap;
+                              margin-top:var(--space-md);padding-top:var(--space-sm);
+                              border-top:1px solid var(--glass-border); }
+#udm-wan-view .ti          { display:flex;flex-direction:column;font-size:.82rem; }
+#udm-wan-view .td          { font-size:.67rem;color:var(--text-muted);
+                              text-transform:uppercase;letter-spacing:.06em; }
+#udm-wan-view .tv          { font-weight:700;font-family:var(--font-mono,monospace);
+                              font-size:.8rem; }
+
+/* ── Gauge ────────────────────────────────────────────────────────────── */
+#udm-wan-view .gauge       { height:4px;border-radius:2px;
+                              background:rgba(120,130,180,.2);overflow:hidden;
+                              margin-top:.2rem; }
+#udm-wan-view .gf          { height:100%;border-radius:2px;transition:width .5s; }
+#udm-wan-view .gf-ok       { background:var(--good,#10b981); }
+#udm-wan-view .gf-warn     { background:var(--warn,#f59e0b); }
+#udm-wan-view .gf-crit     { background:var(--crit,#ef4444); }
+
+/* ── Port table ───────────────────────────────────────────────────────── */
+#udm-wan-view .udm-tbl     { width:100%;border-collapse:collapse;font-size:.8rem; }
+#udm-wan-view .udm-tbl th  { text-align:left;padding:.4rem .55rem;
+                              color:var(--text-muted);font-size:.67rem;font-weight:600;
+                              text-transform:uppercase;letter-spacing:.06em;
+                              border-bottom:1px solid var(--glass-border);
+                              white-space:nowrap; }
+#udm-wan-view .udm-tbl td  { padding:.4rem .55rem;
+                              border-bottom:1px solid var(--glass-border);
+                              font-family:var(--font-mono,monospace);font-size:.76rem; }
+#udm-wan-view .udm-tbl tr:last-child td { border-bottom:none; }
+#udm-wan-view .udm-tbl tr:hover td { background:rgba(120,130,180,.04); }
+#udm-wan-view .t-up        { color:var(--good,#10b981);font-weight:700;font-family:inherit; }
+#udm-wan-view .t-dn        { color:var(--crit,#ef4444);font-weight:700;font-family:inherit; }
+#udm-wan-view .t-empty     { text-align:center;color:var(--text-muted);
+                              padding:1rem;font-family:inherit; }
+
+/* ── Event badges ─────────────────────────────────────────────────────── */
+#udm-wan-view .ev-badge    { display:inline-block;padding:.09rem .4rem;border-radius:5px;
+                              font-size:.67rem;font-weight:700;text-transform:uppercase;
+                              font-family:var(--font-mono,monospace); }
+#udm-wan-view .ev-crit     { background:rgba(239,68,68,.12);color:#f87171;
+                              border:1px solid rgba(239,68,68,.2); }
+#udm-wan-view .ev-warn     { background:rgba(245,158,11,.12);color:#fbbf24;
+                              border:1px solid rgba(245,158,11,.2); }
+#udm-wan-view .ev-info     { background:rgba(6,182,212,.12);color:var(--info,#06b6d4);
+                              border:1px solid rgba(6,182,212,.2); }
+#udm-wan-view .udm-ovx     { overflow-x:auto; }
+#udm-wan-view .udm-debug   { font-size:.72rem;color:var(--text-muted);
+                              background:rgba(120,130,180,.06);
+                              border:1px solid var(--glass-border);border-radius:8px;
+                              padding:.75rem 1rem;margin-top:1rem;
+                              font-family:var(--font-mono,monospace);
+                              white-space:pre-wrap;display:none; }
+</style>
+
+{# ── Header ────────────────────────────────────────────────────────────────── #}
+<div class="udm-hdr">
+  <div class="udm-title"><i data-lucide="router"></i> UDM WAN-Monitor</div>
+  <div class="udm-sub" id="udm-sub">Ubiquiti UDM Pro</div>
+</div>
+
+<div class="udm-bar">
+  <span class="udm-ts">Letztes Update: <strong id="udm-last-ts">—</strong>
+    &nbsp;·&nbsp; Aktiver WAN: <strong id="udm-active-wan">—</strong></span>
+  <div style="display:flex;gap:.4rem;align-items:center;">
+    <span id="udm-err" style="font-size:.77rem;color:var(--crit,#ef4444);display:none;"></span>
+    <button class="btn btn-ghost btn-sm" onclick="udmToggleDebug()">
+      <i data-lucide="bug" style="width:13px;height:13px;"></i>
+    </button>
+    <button class="btn btn-ghost btn-sm" onclick="udmLoad()">
+      <i data-lucide="refresh-cw" style="width:13px;height:13px;"></i> Aktualisieren
+    </button>
+  </div>
+</div>
+
+<pre class="udm-debug" id="udm-debug"></pre>
+
+{# ── WAN 1 + WAN 2 ─────────────────────────────────────────────────────────── #}
+<div class="udm-grid udm-g2">
+
+  <div class="udm-card">
+    <div class="card-hd">
+      <div>
+        <div class="card-title-row">
+          <div class="iw"><i data-lucide="globe"></i></div>
+          <div>
+            <div class="wan-name">WAN 1</div>
+            <div class="wan-ifname">eth9</div>
+          </div>
+        </div>
+        <div class="status-row" style="margin-top:.55rem;">
+          <span class="spill s-unk" id="w1-link">
+            <span class="sdot"></span><span class="spill-lbl">Link</span> <span id="w1-link-txt">…</span>
+          </span>
+          <span class="spill s-unk" id="w1-alive">
+            <span class="sdot"></span><span class="spill-lbl">Alive</span> <span id="w1-alive-txt">…</span>
+          </span>
+          <span class="spill s-unk" id="w1-online">
+            <span class="sdot"></span><span class="spill-lbl">WAN</span> <span id="w1-online-txt">…</span>
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <div class="metric"><span class="ml">IP</span>           <span class="mv" id="w1-ip">—</span></div>
+      <div class="metric"><span class="ml">IPv6</span>         <span class="mv" id="w1-ip6">—</span></div>
+      <div class="metric"><span class="ml">DNS</span>          <span class="mv" id="w1-dns">—</span></div>
+      <div class="metric"><span class="ml">Typ</span>          <span class="mv" id="w1-type">—</span></div>
+      <div class="metric"><span class="ml">Latenz</span>       <span class="mv" id="w1-lat">—</span></div>
+      <div class="metric"><span class="ml">Uptime</span>       <span class="mv" id="w1-uptime">—</span></div>
+      <div class="metric"><span class="ml">Verfügbarkeit</span><span class="mv" id="w1-avail">—</span></div>
+      <div class="avail-bar"><div class="avail-fill" id="w1-avail-bar" style="width:0%"></div></div>
+    </div>
+    <div class="traffic">
+      <div class="ti"><span class="td">↓ RX/s</span>      <span class="tv" id="w1-rx">—</span></div>
+      <div class="ti"><span class="td">↑ TX/s</span>      <span class="tv" id="w1-tx">—</span></div>
+      <div class="ti"><span class="td">Leitungsrate</span><span class="tv" id="w1-spd">—</span></div>
+    </div>
+  </div>
+
+  <div class="udm-card">
+    <div class="card-hd">
+      <div>
+        <div class="card-title-row">
+          <div class="iw"><i data-lucide="globe-2"></i></div>
+          <div>
+            <div class="wan-name">WAN 2</div>
+            <div class="wan-ifname">eth8</div>
+          </div>
+        </div>
+        <div class="status-row" style="margin-top:.55rem;">
+          <span class="spill s-unk" id="w2-link">
+            <span class="sdot"></span><span class="spill-lbl">Link</span> <span id="w2-link-txt">…</span>
+          </span>
+          <span class="spill s-unk" id="w2-alive">
+            <span class="sdot"></span><span class="spill-lbl">Alive</span> <span id="w2-alive-txt">…</span>
+          </span>
+          <span class="spill s-unk" id="w2-online">
+            <span class="sdot"></span><span class="spill-lbl">WAN</span> <span id="w2-online-txt">…</span>
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <div class="metric"><span class="ml">IP</span>           <span class="mv" id="w2-ip">—</span></div>
+      <div class="metric"><span class="ml">IPv6</span>         <span class="mv" id="w2-ip6">—</span></div>
+      <div class="metric"><span class="ml">DNS</span>          <span class="mv" id="w2-dns">—</span></div>
+      <div class="metric"><span class="ml">Typ</span>          <span class="mv" id="w2-type">—</span></div>
+      <div class="metric"><span class="ml">Latenz</span>       <span class="mv" id="w2-lat">—</span></div>
+      <div class="metric"><span class="ml">Uptime</span>       <span class="mv" id="w2-uptime">—</span></div>
+      <div class="metric"><span class="ml">Verfügbarkeit</span><span class="mv" id="w2-avail">—</span></div>
+      <div class="avail-bar"><div class="avail-fill" id="w2-avail-bar" style="width:0%"></div></div>
+    </div>
+    <div class="traffic">
+      <div class="ti"><span class="td">↓ RX/s</span>      <span class="tv" id="w2-rx">—</span></div>
+      <div class="ti"><span class="td">↑ TX/s</span>      <span class="tv" id="w2-tx">—</span></div>
+      <div class="ti"><span class="td">Leitungsrate</span><span class="tv" id="w2-spd">—</span></div>
+    </div>
+  </div>
+
+</div>
+
+{# ── Gerät + System ─────────────────────────────────────────────────────────── #}
+<div class="udm-grid udm-g2 udm-mt">
+
+  <div class="udm-card">
+    <div class="card-hd"><span class="card-lbl">Gerät</span></div>
+    <div class="metrics" style="padding-top:0;border-top:none;">
+      <div class="metric"><span class="ml">Modell</span>   <span class="mv" id="dev-model">—</span></div>
+      <div class="metric"><span class="ml">Name</span>     <span class="mv" id="dev-name">—</span></div>
+      <div class="metric"><span class="ml">Firmware</span> <span class="mv" id="dev-fw">—</span></div>
+      <div class="metric"><span class="ml">IP (LAN)</span> <span class="mv" id="dev-ip">—</span></div>
+      <div class="metric"><span class="ml">MAC</span>      <span class="mv" id="dev-mac">—</span></div>
+      <div class="metric"><span class="ml">Uptime</span>   <span class="mv" id="dev-uptime">—</span></div>
+    </div>
+  </div>
+
+  <div class="udm-card">
+    <div class="card-hd"><span class="card-lbl">System</span></div>
+    <div class="metrics" style="padding-top:0;border-top:none;">
+      <div class="metric"><span class="ml">CPU</span><span class="mv" id="dev-cpu">—</span></div>
+      <div class="gauge"><div class="gf gf-ok" id="cpu-bar" style="width:0%"></div></div>
+      <div class="metric" style="margin-top:.4rem;"><span class="ml">RAM</span><span class="mv" id="dev-mem">—</span></div>
+      <div class="gauge"><div class="gf gf-ok" id="mem-bar" style="width:0%"></div></div>
+      <div class="metric" style="margin-top:.4rem;"><span class="ml">Temperatur</span>     <span class="mv" id="dev-temp">—</span></div>
+      <div class="metric"><span class="ml">Load avg (5 min)</span><span class="mv" id="dev-load">—</span></div>
+      <div class="metric" style="margin-top:.4rem;border-top:1px solid var(--glass-border);padding-top:.4rem;">
+        <span class="ml">LAN Clients</span><span class="mv" id="dev-lan">—</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# ── WAN-Ports ──────────────────────────────────────────────────────────────── #}
+<div class="udm-card udm-mt">
+  <div class="card-hd"><span class="card-lbl">WAN-Ports (Port-Tabelle)</span></div>
+  <div class="udm-ovx">
+    <table class="udm-tbl">
+      <thead><tr>
+        <th>Bezeichnung</th><th>Interface</th><th>Status</th>
+        <th>Geschwindigkeit</th><th>Duplex</th>
+        <th>↓ RX/s</th><th>↑ TX/s</th>
+        <th>RX Bytes</th><th>TX Bytes</th>
+        <th>RX Fehler</th><th>TX Fehler</th>
+        <th>RX Drop</th><th>TX Drop</th>
+      </tr></thead>
+      <tbody id="port-tbody"><tr><td colspan="13" class="t-empty">Laden…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Ereignisprotokoll ──────────────────────────────────────────────────────── #}
+<div class="udm-card udm-mt">
+  <div class="card-hd">
+    <span class="card-lbl">WAN-Ereignisse (globales Log)</span>
+    <span style="font-size:.72rem;color:var(--text-muted);" id="ev-count"></span>
+  </div>
+  <div class="udm-ovx">
+    <table class="udm-tbl">
+      <thead><tr><th>Zeit</th><th>Ereignis</th><th>Schweregrad</th></tr></thead>
+      <tbody id="ev-tbody"><tr><td colspan="3" class="t-empty">Laden…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+</div>{# /view-content #}
+
+<script>
+(function(){
+'use strict';
+if(window._udmWanInit) return;
+window._udmWanInit = true;
+
+const REFRESH_MS = 30_000;
+let _timer = null;
+
+const f   = (v,fb='—') => (v!==null&&v!==undefined&&v!=='') ? String(v) : fb;
+const el  = id => document.getElementById(id);
+const txt = (id,v) => { const e=el(id); if(e) e.textContent=f(v); };
+
+const fBytes = b => {
+  if(b==null) return '—';
+  const n=+b; if(isNaN(n)||n<0) return '—';
+  if(n<1024)       return n+' B';
+  if(n<1048576)    return (n/1024).toFixed(1)+' KB';
+  if(n<1073741824) return (n/1048576).toFixed(1)+' MB';
+  return (n/1073741824).toFixed(2)+' GB';
+};
+const fUp = s => {
+  if(!s||s<=0) return '—';
+  const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);
+  return [d&&d+'d',h&&h+'h',m+'min'].filter(Boolean).join(' ');
+};
+const fSpd  = v => v==null ? '—' : v>=1000 ? (v/1000)+' Gbit/s' : v+' Mbit/s';
+const fPct  = v => v==null ? '—' : parseFloat(v).toFixed(1)+' %';
+const fTmp  = v => v==null ? '—' : parseFloat(v).toFixed(1)+' °C';
+const fAvail= v => v==null ? '—' : v+' %';
+
+function gauge(barId, pct) {
+  const bar=el(barId); if(!bar) return;
+  const p=Math.min(100,Math.max(0,parseFloat(pct)||0));
+  bar.style.width=p+'%';
+  bar.className='gf '+(p>=90?'gf-crit':p>=75?'gf-warn':'gf-ok');
+}
+
+// ── Three-state pill helper ──────────────────────────────────────────────────
+function pill(pillId, txtId, isOk, labelOk, labelBad, labelUnk='?') {
+  const p=el(pillId), t=el(txtId); if(!p||!t) return;
+  if(isOk===null||isOk===undefined){
+    p.className='spill s-unk'; t.textContent=labelUnk; return;
+  }
+  p.className='spill '+(isOk?'s-ok':'s-bad');
+  t.textContent=isOk?labelOk:labelBad;
+}
+
+// ── WAN card fill ────────────────────────────────────────────────────────────
+function fillWan(px, w) {
+  if(!w){ pill(px+'-link',px+'-link-txt',null,'',''); return; }
+
+  pill(px+'-link',   px+'-link-txt',   w.up,     'UP',     'DOWN');
+  pill(px+'-alive',  px+'-alive-txt',  w.alive,  'OK',     'FAIL');
+  pill(px+'-online', px+'-online-txt', w.online, 'Online', 'Offline');
+
+  txt(px+'-ip',     w.ip);
+  txt(px+'-ip6',    w.ipv6);
+  txt(px+'-dns',    w.dns);
+  txt(px+'-type',   w.type ? (w.media ? w.type.toUpperCase()+' / '+w.media : w.type.toUpperCase()) : null);
+  txt(px+'-lat',    w.latency!=null ? w.latency+' ms' : null);
+  txt(px+'-uptime', fUp(w.uptime));
+  txt(px+'-avail',  fAvail(w.availability));
+  const ab=el(px+'-avail-bar');
+  if(ab) ab.style.width=(w.availability!=null?Math.min(100,w.availability):0)+'%';
+  txt(px+'-rx',  w.rx_bytes_r!=null ? fBytes(w.rx_bytes_r)+'/s' : null);
+  txt(px+'-tx',  w.tx_bytes_r!=null ? fBytes(w.tx_bytes_r)+'/s' : null);
+  txt(px+'-spd', fSpd(w.speed));
+}
+
+// ── Device card fill ─────────────────────────────────────────────────────────
+function fillDevice(dev) {
+  if(!dev) return;
+  txt('dev-model',  dev.model);
+  txt('dev-name',   dev.name);
+  txt('dev-fw',     dev.version);
+  txt('dev-ip',     dev.ip);
+  txt('dev-mac',    dev.mac);
+  txt('dev-uptime', fUp(dev.uptime));
+  txt('dev-cpu',    fPct(dev.cpu_pct));
+  txt('dev-mem',    fPct(dev.mem_pct));
+  txt('dev-temp',   fTmp(dev.temperature));
+  txt('dev-load',   dev.load_avg!=null ? parseFloat(dev.load_avg).toFixed(2) : null);
+  txt('dev-lan',    dev.lan_clients!=null ? String(dev.lan_clients) : null);
+  gauge('cpu-bar',  dev.cpu_pct);
+  gauge('mem-bar',  dev.mem_pct);
+  const sub=el('udm-sub');
+  if(sub&&dev.model) sub.textContent=dev.name?dev.name+' ('+dev.model+')':dev.model;
+}
+
+// ── Port table ───────────────────────────────────────────────────────────────
+function fillPorts(ports) {
+  const tbody=el('port-tbody'); if(!tbody) return;
+  if(!ports||!ports.length){
+    tbody.innerHTML='<tr><td colspan="13" class="t-empty">Keine WAN-Port-Daten</td></tr>';
+    return;
+  }
+  tbody.innerHTML=ports.map(p=>`<tr>
+    <td><strong style="font-family:inherit;">${f(p.label||p.name)}</strong></td>
+    <td>${f(p.ifname)}</td>
+    <td class="${p.up?'t-up':'t-dn'}">${p.up?'▲ UP':'▼ DOWN'}</td>
+    <td>${fSpd(p.speed)}</td>
+    <td>${p.full_duplex!=null?(p.full_duplex?'Full':'Half'):'—'}</td>
+    <td>${fBytes(p.rx_bytes_r)}/s</td>
+    <td>${fBytes(p.tx_bytes_r)}/s</td>
+    <td>${fBytes(p.rx_bytes)}</td>
+    <td>${fBytes(p.tx_bytes)}</td>
+    <td>${f(p.rx_errors,'0')}</td>
+    <td>${f(p.tx_errors,'0')}</td>
+    <td>${f(p.rx_dropped,'0')}</td>
+    <td>${f(p.tx_dropped,'0')}</td>
+  </tr>`).join('');
+}
+
+// ── Event log ────────────────────────────────────────────────────────────────
+async function refreshEvents() {
+  try {
+    const r=await fetch('/api/events?event_type=udm_wan&limit=100');
+    const d=await r.json();
+    const tbody=el('ev-tbody'), cnt=el('ev-count');
+    if(!tbody) return;
+    const evs=d.events||[];
+    if(!evs.length){
+      tbody.innerHTML='<tr><td colspan="3" class="t-empty">Noch keine WAN-Ereignisse.</td></tr>';
+      if(cnt) cnt.textContent=''; return;
+    }
+    if(cnt) cnt.textContent=evs.length+' Einträge';
+    tbody.innerHTML=evs.map(ev=>{
+      const ts=new Date(ev.timestamp).toLocaleString('de-DE');
+      const sev=ev.severity||'info';
+      const cls=sev==='critical'?'ev-crit':sev==='warning'?'ev-warn':'ev-info';
+      return `<tr>
+        <td style="white-space:nowrap;">${ts}</td>
+        <td>${ev.message}</td>
+        <td><span class="ev-badge ${cls}">${sev}</span></td>
+      </tr>`;
+    }).join('');
+  } catch(e){ console.warn('[UDM WAN] events error',e); }
+}
+
+// ── Main refresh ─────────────────────────────────────────────────────────────
+async function udmLoad() {
+  const errEl=el('udm-err'), dbg=el('udm-debug');
+  try {
+    const r=await fetch('/api/udm-wan/detail');
+    const d=await r.json();
+    if(dbg&&dbg.style.display!=='none') dbg.textContent=JSON.stringify(d,null,2);
+    if(!d.ok){
+      if(errEl){errEl.textContent='⚠ '+d.error;errEl.style.display='';}
+      return;
+    }
+    if(errEl) errEl.style.display='none';
+
+    fillWan('w1', d.wan1||null);
+    fillWan('w2', d.wan2||null);
+    fillDevice(d.device||{});
+    fillPorts(d.wan_ports||[]);
+
+    const ts=el('udm-last-ts');
+    if(ts) ts.textContent=new Date(d.timestamp).toLocaleTimeString('de-DE');
+    const aw=el('udm-active-wan');
+    if(aw) aw.textContent=d.device&&d.device.active_wan ? d.device.active_wan : '—';
+  } catch(e){
+    if(errEl){errEl.textContent='⚠ Fetch error: '+e;errEl.style.display='';}
+    console.warn('[UDM WAN] detail error',e);
+  }
+}
+
+function udmToggleDebug(){
+  const dbg=el('udm-debug'); if(!dbg) return;
+  dbg.style.display=dbg.style.display==='none'?'block':'none';
+  if(dbg.style.display!=='none') udmLoad();
+}
+
+async function udmRefreshAll(){ await Promise.all([udmLoad(),refreshEvents()]); }
+window.udmRefresh=udmRefreshAll;
+window.udmToggleDebug=udmToggleDebug;
+
+function startPolling(){
+  udmRefreshAll();
+  if(_timer) clearInterval(_timer);
+  _timer=setInterval(udmRefreshAll,REFRESH_MS);
+}
+
+const viewEl=document.getElementById('view-mod-community-udm_wan_monitor');
+if(viewEl){
+  new MutationObserver(()=>{
+    if(viewEl.classList.contains('active')) startPolling();
+    else { clearInterval(_timer);_timer=null; }
+  }).observe(viewEl,{attributes:true,attributeFilter:['class']});
+  if(viewEl.classList.contains('active')) startPolling();
+} else {
+  startPolling();
+}
+if(typeof lucide!=='undefined') lucide.createIcons();
+})();
+</script>

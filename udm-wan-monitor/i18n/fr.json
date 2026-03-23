@@ -1,0 +1,21 @@
+{
+  "nav_title": "Moniteur WAN UDM",
+  "settings_title": "Moniteur WAN Ubiquiti UDM",
+  "settings_subtitle": "Surveiller WAN1 & WAN2 · Événements dans le log global · UDM Pro / UDM SE",
+  "open_dashboard": "Tableau de bord",
+  "enabled": "Activer le moniteur WAN UDM",
+  "enabled_hint": "Démarre la surveillance et écrit les événements WAN dans le journal global DOCSight.",
+  "host": "Hôte UDM / Adresse IP",
+  "host_hint": "Adresse IP ou nom d'hôte de l'UDM Pro (HTTPS, port 443 par défaut)",
+  "username": "Nom d'utilisateur",
+  "password": "Mot de passe",
+  "password_hint": "Stocké chiffré dans la configuration DOCSight.",
+  "port": "Port HTTPS",
+  "site": "Nom du site UniFi",
+  "site_hint": "Généralement \"default\" sauf si vous avez plusieurs sites UniFi.",
+  "interval": "Intervalle de sondage (secondes)",
+  "interval_hint": "Fréquence de vérification du statut WAN. Minimum : 15 s.",
+  "verify_ssl": "Vérifier le certificat SSL",
+  "verify_ssl_hint": "Désactiver pour les certificats auto-signés de l'UDM (recommandé).",
+  "test_connection": "Tester la connexion"
+}
