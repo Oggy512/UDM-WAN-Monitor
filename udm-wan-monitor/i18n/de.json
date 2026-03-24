@@ -21,9 +21,18 @@
   "extra_ports_title": "Optionale zusätzliche Ports",
   "extra_ports_hint": "Bis zu zwei weitere Ports überwachen (z.B. ein SFP+-Port als dritter WAN-Uplink). Interface-Name wie \"eth7\", Alias frei wählbar. Leer lassen um zu deaktivieren.",
   "extra_port1_ifname": "Zusatz-Port 1 — Interface",
-  "extra_port1_alias":  "Zusatz-Port 1 — Alias",
+  "extra_port1_alias": "Zusatz-Port 1 — Alias",
   "extra_port2_ifname": "Zusatz-Port 2 — Interface",
-  "extra_port2_alias":  "Zusatz-Port 2 — Alias",
+  "extra_port2_alias": "Zusatz-Port 2 — Alias",
   "extra_port_ifname_hint": "Interface-Name, z.B. eth7",
-  "extra_port_alias_hint":  "Anzeigename im Dashboard"
+  "extra_port_alias_hint": "Anzeigename im Dashboard",
+  "event_down": "{iface} ({ip}): ausgefallen — alive=false, offline",
+  "event_up": "{iface} ({ip}): wiederhergestellt — alive=true, online",
+  "event_alive_false": "{iface} ({ip}): nicht erreichbar (alive=false)",
+  "event_alive_true": "{iface} ({ip}): wieder erreichbar (alive=true)",
+  "event_offline": "{iface} ({ip}): offline",
+  "event_online": "{iface} ({ip}): wieder online",
+  "event_link_down": "{iface} ({ip}): Link DOWN",
+  "event_link_up": "{iface} ({ip}): Link UP",
+  "event_failover": "WAN Failover: {old} → {new} ist jetzt aktiver Uplink"
 }

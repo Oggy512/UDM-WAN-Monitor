@@ -1,35 +1,39 @@
 """
-UDM WAN Monitor — Collector  v4
-Polls /proxy/network/api/s/{site}/stat/device and extracts
-wan1, wan2, last_wan_interfaces, last_wan_status from the UDM device entry.
+UDM WAN Monitor — Collector  v3.1.0
+
+Polls /proxy/network/api/s/{site}/stat/device and extracts WAN status
+from the UDM device entry.
 
 State tracked per interface:
-  - up         (port link state from wan1/wan2.up)
-  - alive      (from last_wan_interfaces.WAN/WAN2.alive)
-  - online     (from last_wan_status.WAN/WAN2 == "online")
+  - up        (link state from wan1/wan2.up)
+  - alive     (from last_wan_interfaces.WAN/WAN2.alive)
+  - online    (from last_wan_status.WAN/WAN2 == "online")
+  - is_uplink (active WAN interface — failover detection)
 
-Events fired on any state change (critical for degradation, info for recovery).
+Review fixes applied:
+  - No global urllib3.disable_warnings(); verify=False set on session only
+  - _build_cfg_from validates and normalises host/port/protocol
+  - _write_events uses save_event() directly (no fragile hasattr branching)
+  - All event messages in English; German translations live in i18n/de.json
+  - Blueprint static_url_path removed (no static/ dir exists)
 """
 
 import logging
 import threading
+from urllib.parse import urlparse, urlunparse
 
 import requests
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app.collectors.base import Collector, CollectorResult
 from app.tz import utc_now
 
 logger = logging.getLogger("docsight.udm_wan_monitor")
 
-# ── In-process state ────────────────────────────────────────────────────────
-# Each entry: {"up": None, "alive": None, "online": None}
+# ── In-process WAN state ─────────────────────────────────────────────────────
 _state_lock = threading.Lock()
 _state = {
-    "wan1": {"up": None, "alive": None, "online": None},
-    "wan2": {"up": None, "alive": None, "online": None},
+    "wan1": {"up": None, "alive": None, "online": None, "is_uplink": None},
+    "wan2": {"up": None, "alive": None, "online": None, "is_uplink": None},
 }
 
 
@@ -79,8 +83,9 @@ class UdmWanCollector(Collector):
         self._last_result = {"parsed": parsed, "timestamp": ts}
         return CollectorResult.ok(self.name, {"parsed": parsed, "events": events, "timestamp": ts})
 
-    # ── Session ──────────────────────────────────────────────────────────────
-    def _get_session(self, cfg):
+    # ── Session management ────────────────────────────────────────────────────
+
+    def _get_session(self, cfg) -> requests.Session:
         with self._session_lock:
             if self._session is None:
                 self._session = _login(cfg)
@@ -90,81 +95,168 @@ class UdmWanCollector(Collector):
         with self._session_lock:
             self._session = None
 
-    # ── State change detection ────────────────────────────────────────────────
+    # ── State-change detection ────────────────────────────────────────────────
+
     def _detect_changes(self, parsed: dict) -> list[dict]:
-        events = []
+        events: list[dict] = []
         now = utc_now()
+
         with _state_lock:
+            # Failover: active uplink interface changed
+            new_uplink = next(
+                (k for k in ("wan1", "wan2") if parsed.get(k, {}).get("is_uplink")),
+                None,
+            )
+            old_uplink = next(
+                (k for k in ("wan1", "wan2") if _state[k]["is_uplink"] is True),
+                None,
+            )
+            if old_uplink is not None and new_uplink is not None and old_uplink != new_uplink:
+                old_lbl = "WAN 1" if old_uplink == "wan1" else "WAN 2"
+                new_lbl = "WAN 1" if new_uplink == "wan1" else "WAN 2"
+                msg = f"WAN failover: {old_lbl} → {new_lbl} is now the active uplink"
+                self._append_event(events, now, "warning", msg, new_lbl, "failover", None)
+
+            # Per-interface state checks
             for key in ("wan1", "wan2"):
-                w = parsed.get(key, {})
-                iface_label = "WAN 1" if key == "wan1" else "WAN 2"
-                prev = _state[key]
+                w     = parsed.get(key, {})
+                label = "WAN 1" if key == "wan1" else "WAN 2"
+                prev  = _state[key]
+                ip    = w.get("ip")
 
-                for field, cur_val in [
-                    ("up",     w.get("up")),
-                    ("alive",  w.get("alive")),
-                    ("online", w.get("online")),
-                ]:
-                    old_val = prev[field]
-                    if old_val is None:
-                        # First poll — establish baseline silently
-                        prev[field] = cur_val
-                        logger.info("UDM WAN: baseline %s.%s = %s", key, field, cur_val)
-                        continue
-                    if cur_val == old_val:
-                        continue
+                cur_up       = w.get("up")
+                cur_alive    = w.get("alive")
+                cur_online   = w.get("online")
+                cur_is_uplink= w.get("is_uplink", False)
 
-                    prev[field] = cur_val
-                    # Determine severity: degradation = critical/warning, recovery = info
-                    degraded = (cur_val is False) or (cur_val == "offline") or (cur_val is False)
-                    if degraded:
-                        sev = "critical" if key == "wan1" else "warning"
-                    else:
-                        sev = "info"
+                # Always update is_uplink (baseline or current)
+                prev["is_uplink"] = cur_is_uplink
 
-                    msg = _event_msg(iface_label, field, cur_val, w.get("ip"))
-                    events.append({
-                        "timestamp":  now,
-                        "severity":   sev,
-                        "event_type": "udm_wan",
-                        "message":    msg,
-                        "details": {
-                            "interface": iface_label,
-                            "field":     field,
-                            "value":     str(cur_val),
-                            "ip":        w.get("ip"),
-                            "source":    "community.udm_wan_monitor",
-                        },
-                    })
-                    logger.warning("UDM WAN EVENT: %s", msg)
+                # ── alive + online (combined event logic) ─────────────────────
+                first_alive  = prev["alive"]  is None
+                first_online = prev["online"] is None
+
+                if first_alive:
+                    prev["alive"] = cur_alive
+                if first_online:
+                    prev["online"] = cur_online
+
+                if not first_alive and not first_online:
+                    alive_ch  = cur_alive  != prev["alive"]
+                    online_ch = cur_online != prev["online"]
+
+                    if alive_ch or online_ch:
+                        prev["alive"]  = cur_alive
+                        prev["online"] = cur_online
+
+                        both_down = alive_ch and not cur_alive and online_ch and not cur_online
+                        both_up   = alive_ch and cur_alive     and online_ch and cur_online
+
+                        if both_down:
+                            msg = f"{label} ({ip or '?'}): down — alive=false, offline"
+                            self._append_event(events, now, "critical", msg, label, "down", ip)
+                        elif both_up:
+                            msg = f"{label} ({ip or '?'}): restored — alive=true, online"
+                            self._append_event(events, now, "info", msg, label, "up", ip)
+                        else:
+                            if alive_ch:
+                                degraded = not cur_alive
+                                msg = _event_msg(label, "alive", cur_alive, ip)
+                                self._append_event(
+                                    events, now,
+                                    "critical" if degraded else "info",
+                                    msg, label,
+                                    "alive_down" if degraded else "alive_up", ip,
+                                )
+                            if online_ch:
+                                degraded = not cur_online
+                                msg = _event_msg(label, "online", cur_online, ip)
+                                self._append_event(
+                                    events, now,
+                                    "critical" if degraded else "info",
+                                    msg, label,
+                                    "offline" if degraded else "online", ip,
+                                )
+
+                # ── link state (always individual) ────────────────────────────
+                if prev["up"] is None:
+                    prev["up"] = cur_up
+                elif cur_up != prev["up"]:
+                    prev["up"] = cur_up
+                    degraded = not cur_up
+                    msg = _event_msg(label, "up", cur_up, ip)
+                    self._append_event(
+                        events, now,
+                        "critical" if degraded else "info",
+                        msg, label,
+                        "link_down" if degraded else "link_up", ip,
+                    )
+
         return events
 
-    def _write_events(self, events: list[dict]):
+    @staticmethod
+    def _append_event(events, now, severity, msg, iface, direction, ip):
+        events.append({
+            "timestamp":  now,
+            "severity":   severity,
+            "event_type": "udm_wan",
+            "message":    msg,
+            "details": {
+                "interface": iface,
+                "direction": direction,
+                "ip":        ip,
+                "source":    "community.udm_wan_monitor",
+            },
+        })
+        logger.warning("UDM WAN EVENT: %s", msg)
+
+    def _write_events(self, events: list[dict]) -> None:
+        """Write events to DOCSight's global event log via save_event()."""
+        if not self._storage:
+            return
         try:
-            if self._storage and hasattr(self._storage, "save_events"):
-                self._storage.save_events(events)
-                logger.info("UDM WAN: wrote %d event(s) to global log", len(events))
-            elif self._storage and hasattr(self._storage, "save_event"):
-                for ev in events:
-                    self._storage.save_event(
-                        timestamp  = ev["timestamp"],
-                        severity   = ev["severity"],
-                        event_type = ev["event_type"],
-                        message    = ev["message"],
-                        details    = ev.get("details"),
-                    )
+            for ev in events:
+                self._storage.save_event(
+                    timestamp  = ev["timestamp"],
+                    severity   = ev["severity"],
+                    event_type = ev["event_type"],
+                    message    = ev["message"],
+                    details    = ev.get("details"),
+                )
+            logger.info("UDM WAN: wrote %d event(s) to global log", len(events))
         except Exception:  # noqa: BLE001
             logger.warning("UDM WAN: could not write events to global log", exc_info=True)
 
 
-# ── Module-level helpers ──────────────────────────────────────────────────────
+# ── Module-level helpers (shared with routes.py) ──────────────────────────────
 
 def _build_cfg_from(cfg) -> dict:
-    host = (cfg.get("udm_wan_host") or "").strip().rstrip("/")
-    port = int(cfg.get("udm_wan_port", 443) or 443)
-    base = f"https://{host}:{port}" if host and not host.startswith("http") else f"{host}:{port}"
+    """
+    Build a normalised config dict from the DOCSight config manager.
+
+    Handles these host inputs safely:
+      - bare IP/hostname:     "10.10.10.254"
+      - with protocol:        "https://10.10.10.254"
+      - with protocol+port:   "https://10.10.10.254:8443"
+    Port from the config field always takes precedence over any port in the host string.
+    Protocol is always forced to https.
+    """
+    raw_host = (cfg.get("udm_wan_host") or "").strip().rstrip("/")
+    cfg_port = int(cfg.get("udm_wan_port", 443) or 443)
+
+    if raw_host:
+        # Ensure we have a parseable URL
+        if "://" not in raw_host:
+            raw_host = "https://" + raw_host
+        parsed = urlparse(raw_host)
+        hostname = parsed.hostname or ""          # pure hostname, no port
+        base = urlunparse(("https", f"{hostname}:{cfg_port}", "", "", "", ""))
+    else:
+        hostname = ""
+        base = ""
+
     return {
-        "host":       host,
+        "host":       hostname,
         "base":       base,
         "username":   cfg.get("udm_wan_username", ""),
         "password":   cfg.get("udm_wan_password", ""),
@@ -174,75 +266,84 @@ def _build_cfg_from(cfg) -> dict:
 
 
 def _login(cfg: dict) -> requests.Session:
+    """Authenticate with UniFi OS 5.x (with legacy /api/login fallback)."""
     session = requests.Session()
-    session.verify = cfg["verify_ssl"]
+    session.verify = cfg["verify_ssl"]   # verify=False per-session, not globally
     payload = {"username": cfg["username"], "password": cfg["password"], "remember": True}
     headers = {"Content-Type": "application/json"}
-    r = session.post(f"{cfg['base']}/api/auth/login", json=payload, headers=headers, timeout=15)
+
+    r = session.post(
+        f"{cfg['base']}/api/auth/login", json=payload, headers=headers, timeout=15
+    )
     if r.status_code != 200:
-        r = session.post(f"{cfg['base']}/api/login", json=payload, headers=headers, timeout=15)
+        r = session.post(
+            f"{cfg['base']}/api/login", json=payload, headers=headers, timeout=15
+        )
     r.raise_for_status()
+
     token = r.headers.get("X-Updated-Csrf-Token") or r.headers.get("csrf-token")
     if token:
         session.headers["X-Csrf-Token"] = token
-    logger.info("UDM WAN: login OK")
+    logger.info("UDM WAN: login successful")
     return session
 
 
 def _fetch_udm_device(session: requests.Session, cfg: dict) -> dict:
     """Fetch /stat/device and return the UDM/gateway device entry."""
-    base = cfg["base"]
-    site = cfg["site"]
-    url  = f"{base}/proxy/network/api/s/{site}/stat/device"
+    url = f"{cfg['base']}/proxy/network/api/s/{cfg['site']}/stat/device"
     r = session.get(url, timeout=15)
     if r.status_code == 401:
         raise PermissionError("Session expired (401)")
     r.raise_for_status()
     devices = r.json().get("data", [])
-    # Find the gateway device (udm / ugw / usg type)
-    udm = next((d for d in devices if d.get("type") in ("udm", "ugw", "usg")),
-               devices[0] if devices else {})
-    return udm
+    return next(
+        (d for d in devices if d.get("type") in ("udm", "ugw", "usg")),
+        devices[0] if devices else {},
+    )
 
 
 def parse_device(d: dict) -> dict:
     """
-    Extract all WAN info from a single UDM stat/device entry.
+    Parse a UDM stat/device entry into a structured dict.
 
-    Sources:
+    Field sources:
       wan1 / wan2           → ip, up, latency, speed, rx/tx, availability, type, ipv6, dns
-      last_wan_interfaces   → alive (bool) per interface
-      last_wan_status       → "online"/"offline" per interface
-      uplink                → nameservers_dynamic (for WAN1 if wan1.dns is absent), uptime
+      last_wan_interfaces   → alive (bool)
+      last_wan_status       → "online" / "offline"
+      active_geo_info       → public IP address, ISP, city, country
+      uplink                → nameservers_dynamic (DNS fallback for WAN1), uptime
     """
     wan1_raw = d.get("wan1", {})
     wan2_raw = d.get("wan2", {})
-    lwi      = d.get("last_wan_interfaces", {})   # {"WAN": {"ip":..,"alive":..}, "WAN2":{..}}
-    lws      = d.get("last_wan_status", {})        # {"WAN": "online", "WAN2": "offline"}
-    uplink   = d.get("uplink", {})                 # active uplink extra info
+    lwi      = d.get("last_wan_interfaces", {})
+    lws      = d.get("last_wan_status", {})
+    uplink   = d.get("uplink", {})
+    geo      = d.get("active_geo_info", {})
 
-    def _wan(raw, lwi_key, lws_key, uplink_data):
-        dns_list = raw.get("dns") or []
-        # For WAN1 dns may be absent — fall back to uplink.nameservers_dynamic
+    def _parse_wan(raw, lwi_key, lws_key, geo_key, uplink_data):
+        dns_list = list(raw.get("dns") or [])
         if not dns_list and uplink_data:
-            dns_list = uplink_data.get("nameservers_dynamic") or []
-        # alive / online come from the dedicated fields
+            dns_list = list(uplink_data.get("nameservers_dynamic") or [])
+
         lwi_entry = lwi.get(lwi_key, {})
+        geo_entry = geo.get(geo_key, {})
+
         return {
-            "ip":           raw.get("ip"),
+            "ip":           geo_entry.get("address") or raw.get("ip"),
+            "ip_local":     raw.get("ip"),
             "netmask":      raw.get("netmask"),
-            "ipv6":         (raw.get("ipv6") or [None])[0],   # first IPv6 addr
+            "ipv6":         (raw.get("ipv6") or [None])[0],
             "up":           raw.get("up"),
-            "alive":        lwi_entry.get("alive"),            # from last_wan_interfaces
-            "online":       lws.get(lws_key) == "online",     # from last_wan_status
+            "alive":        lwi_entry.get("alive"),
+            "online":       lws.get(lws_key) == "online",
+            "is_uplink":    raw.get("is_uplink", False),
             "latency":      raw.get("latency"),
-            "availability": raw.get("availability"),           # % uptime
+            "availability": raw.get("availability"),
             "speed":        raw.get("speed"),
             "type":         raw.get("type"),
             "media":        raw.get("media"),
             "full_duplex":  raw.get("full_duplex"),
             "ifname":       raw.get("ifname") or raw.get("name"),
-            "is_uplink":    raw.get("is_uplink", False),
             "rx_bytes":     raw.get("rx_bytes"),
             "tx_bytes":     raw.get("tx_bytes"),
             "rx_bytes_r":   raw.get("rx_bytes-r"),
@@ -251,46 +352,49 @@ def parse_device(d: dict) -> dict:
             "tx_errors":    raw.get("tx_errors"),
             "rx_dropped":   raw.get("rx_dropped"),
             "tx_dropped":   raw.get("tx_dropped"),
-            "dns":          ", ".join(str(x) for x in dns_list) if dns_list else None,
+            "dns":          ", ".join(str(x) for x in dns_list) or None,
+            "isp":          geo_entry.get("isp_name"),
+            "city":         geo_entry.get("city"),
+            "country":      geo_entry.get("country_code"),
         }
 
-    # uplink is only for the active WAN — pass it to WAN1 (typically eth9)
-    wan1_is_uplink = wan1_raw.get("is_uplink", False)
-    result = {
-        "wan1": _wan(wan1_raw, "WAN",  "WAN",  uplink if wan1_is_uplink else None),
-        "wan2": _wan(wan2_raw, "WAN2", "WAN2", uplink if not wan1_is_uplink else None),
-        # Device-level info
+    wan1_is_uplink = bool(wan1_raw.get("is_uplink"))
+    return {
+        "wan1": _parse_wan(
+            wan1_raw, "WAN",  "WAN",  "WAN",
+            uplink if wan1_is_uplink else None,
+        ),
+        "wan2": _parse_wan(
+            wan2_raw, "WAN2", "WAN2", "WAN2",
+            uplink if not wan1_is_uplink else None,
+        ),
         "device": {
-            "model":       d.get("model"),
-            "name":        d.get("name"),
-            "version":     d.get("version"),
-            "ip":          d.get("ip"),
-            "mac":         d.get("mac"),
-            "uptime":      uplink.get("uptime") or d.get("uptime"),
-            "cpu_pct":     d.get("system-stats", {}).get("cpu"),
-            "mem_pct":     d.get("system-stats", {}).get("mem"),
-            "temperature": (d.get("temperatures") or [{}])[0].get("value"),
-            "load_avg":    d.get("loadavg_5"),
-            "lan_clients":  next((s.get("num_sta") for s in [d] if d.get("num_sta")), None)
-                            or d.get("user-num_sta"),
-            "wlan_clients": d.get("wlangroup_num_sta") or d.get("num_sta"),
-            "active_wan":  uplink.get("comment"),   # "WAN" or "WAN2"
+            "model":        d.get("model"),
+            "name":         d.get("name"),
+            "version":      d.get("version"),
+            "ip":           d.get("ip"),
+            "mac":          d.get("mac"),
+            "uptime":       uplink.get("uptime") or d.get("uptime"),
+            "cpu_pct":      d.get("system-stats", {}).get("cpu"),
+            "mem_pct":      d.get("system-stats", {}).get("mem"),
+            "temperature":  (d.get("temperatures") or [{}])[0].get("value"),
+            "lan_clients":  d.get("user-num_sta") or d.get("num_sta"),
+            "active_wan":   uplink.get("comment"),
         },
-        # Raw extra ports from config (populated in routes.py)
-        "wan_ports": [],
+        "wan_ports": [],   # populated by routes.py from port_table
     }
-    return result
 
 
 def _event_msg(iface: str, field: str, value, ip: str | None) -> str:
+    """Build an English event message for a single field change."""
     ip_str = f" ({ip})" if ip else ""
     if field == "alive":
-        state = "nicht erreichbar (alive=false)" if not value else "wieder erreichbar (alive=true)"
+        state = "unreachable (alive=false)" if not value else "reachable again (alive=true)"
         return f"{iface}{ip_str}: {state}"
     if field == "online":
-        state = "offline" if not value else "wieder online"
+        state = "offline" if not value else "back online"
         return f"{iface}{ip_str}: {state}"
     if field == "up":
-        state = "Link DOWN" if not value else "Link UP"
+        state = "link DOWN" if not value else "link UP"
         return f"{iface}{ip_str}: {state}"
-    return f"{iface}: {field} geändert zu {value}"
+    return f"{iface}: {field} changed to {value}"

@@ -17,5 +17,8 @@
   "interval_hint": "Con qué frecuencia verificar el estado WAN. Mínimo: 15 s.",
   "verify_ssl": "Verificar certificado SSL",
   "verify_ssl_hint": "Desactivar para certificados autofirmados del UDM (recomendado).",
-  "test_connection": "Probar conexión"
+  "test_connection": "Probar conexión",
+  "event_down": "{iface} ({ip}): caído — alive=false, offline",
+  "event_up": "{iface} ({ip}): restaurado — alive=true, online",
+  "event_failover": "Conmutación WAN: {old} → {new} es ahora el enlace activo"
 }

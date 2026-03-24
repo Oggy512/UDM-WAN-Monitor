@@ -11,10 +11,7 @@ import logging
 from datetime import datetime, timezone
 
 import requests as req
-import urllib3
 from flask import Blueprint, jsonify, render_template
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger("docsight.udm_wan_monitor")
 
@@ -22,8 +19,6 @@ bp = Blueprint(
     "udm_wan_monitor_bp",
     __name__,
     template_folder="templates",
-    static_folder="static",
-    static_url_path="/modules/community.udm_wan_monitor/static",
 )
 
 # ── Lazy helpers ──────────────────────────────────────────────────────────────
